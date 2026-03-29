@@ -23,10 +23,8 @@ namespace schnet::app {
         torch::Device device = torch::kCUDA
     );
 
-    std::unique_ptr<Graph> read_xyz_as_graph(
-        const std::string& path, 
-        float cutoff
-    );
+    Graph read_xyz_as_graph(const std::string& path, float cutoff);
+    Graph build_graph(const torch::Tensor& positions, const torch::Tensor& atomic_numbers, float cutoff);
 
     void save_graph(Graph& graph, const std::string& path);
     void load_graph(Graph& graph, const std::string& path);

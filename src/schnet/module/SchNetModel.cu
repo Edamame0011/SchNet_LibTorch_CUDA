@@ -40,9 +40,6 @@ std::tuple<torch::Tensor, torch::Tensor> SchNetModelImpl::forward(Graph& graph, 
     auto forces = CalcForceFunction::apply(
         diff_E, 
         graph.dst_node_ptr, 
-        graph.src_list, 
-        graph.src_node_ptr, 
-        graph.dst_list, 
         graph.num_nodes
     );
 

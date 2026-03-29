@@ -39,8 +39,6 @@ torch::Tensor InteractionLayerImpl::forward(
         V, 
         graph.dst_node_ptr, 
         graph.src_list, 
-        graph.src_node_ptr, 
-        graph.dst_list, 
         graph.num_nodes
     );
     auto h = act(lin2(agg_messages));

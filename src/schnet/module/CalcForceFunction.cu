@@ -2,9 +2,9 @@
 
 namespace {
     __global__ void calc_force_kernel(
-        const float* __restrict__ diff_E, 
+        const float3* __restrict__ diff_E, 
         const int32_t* __restrict__ dst_node_ptr, 
-        float* __restrict__ force, 
+        float3* __restrict__ force, 
         int num_nodes
     ) {
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -16,34 +16,29 @@ namespace {
             float sum_y = 0.0f;
             float sum_z = 0.0f;
             for (int e = start_edge; e < end_edge; e ++) {
-                sum_x += diff_E[3 * e];
-                sum_y += diff_E[3 * e + 1];
-                sum_z += diff_E[3 * e + 2];
+                float3 val = diff_E[e];
+                sum_x += val.x;
+                sum_y += val.y;
+                sum_z += val.z;
             }
-            force[3 * idx] = sum_x;
-            force[3 * idx + 1] = sum_y;
-            force[3 * idx + 2] = sum_z;
+            force[idx] = make_float3(sum_x, sum_y, sum_z);
         }
     }
 
     __global__ void calc_force_grad_kernel(
-        const float* __restrict__ grad_force, 
-        const int32_t* __restrict__ src_node_ptr, 
-        float* __restrict__ grad_diff_E, 
+        const float3* __restrict__ grad_force, 
+        const int32_t* __restrict__ dst_node_ptr, 
+        float3* __restrict__ grad_diff_E, 
         int num_nodes
     ) {
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx < num_nodes) {
-            int start_edge = src_node_ptr[idx];
-            int end_edge = src_node_ptr[idx + 1];
+            int start_edge = dst_node_ptr[idx];
+            int end_edge = dst_node_ptr[idx + 1];
 
-            float gx = grad_force[3 * idx];
-            float gy = grad_force[3 * idx + 1];
-            float gz = grad_force[3 * idx + 2];
+            float3 g = grad_force[idx];
             for (int e = start_edge; e < end_edge; e++) {
-                grad_diff_E[3 * e] = gx;
-                grad_diff_E[3 * e + 1] = gy;
-                grad_diff_E[3 * e + 2] = gz;            
+                grad_diff_E[e] = g;  
             }
         }
     }
@@ -55,9 +50,6 @@ torch::Tensor CalcForceFunction::forward(
     torch::autograd::AutogradContext *ctx, 
     const torch::Tensor& diff_E, 
     const torch::Tensor& dst_node_ptr, 
-    const torch::Tensor& src_list, 
-    const torch::Tensor& src_node_ptr, 
-    const torch::Tensor& dst_list, 
     int num_nodes
 ) {
     ctx->save_for_backward({dst_node_ptr});
@@ -70,9 +62,9 @@ torch::Tensor CalcForceFunction::forward(
     auto force = torch::zeros({num_nodes, 3}, diff_E.options());
 
     calc_force_kernel<<<blocks, threads>>>(
-        diff_E.data_ptr<float>(), 
+        reinterpret_cast<const float3*>(diff_E.data_ptr<float>()), 
         dst_node_ptr.data_ptr<int32_t>(), 
-        force.data_ptr<float>(), 
+        reinterpret_cast<float3*>(force.data_ptr<float>()), 
         num_nodes
     );
 
@@ -97,14 +89,14 @@ torch::autograd::tensor_list CalcForceFunction::backward(
     auto grad_diff_E = torch::empty({num_edges, 3}, grad_force.options());
 
     calc_force_grad_kernel<<<blocks, threads>>>(
-        grad_force.data_ptr<float>(),
+        reinterpret_cast<const float3*>(grad_force.data_ptr<float>()),
         dst_node_ptr.data_ptr<int32_t>(),
-        grad_diff_E.data_ptr<float>(),
+        reinterpret_cast<float3*>(grad_diff_E.data_ptr<float>()),
         num_nodes
     );
 
     return {
         grad_diff_E, 
-        torch::Tensor(), torch::Tensor(), torch::Tensor(), torch::Tensor(), torch::Tensor()
+        torch::Tensor(), torch::Tensor()
     };
 }

@@ -32,8 +32,8 @@ namespace {
 __global__ void agg_messages_backward_V_kernel(
         const float* __restrict__ grad_agg, 
         const float* __restrict__ W,
-        const int32_t* __restrict__ src_node_ptr,
-        const int32_t* __restrict__ dst_list,
+        const int32_t* __restrict__ dst_node_ptr, 
+        const int32_t* __restrict__ src_list, 
         float* __restrict__ grad_V,
         int num_nodes,
         int num_filters
@@ -41,40 +41,41 @@ __global__ void agg_messages_backward_V_kernel(
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
         int total_elements = num_nodes * num_filters;
         if (idx < total_elements) {
-            int src = idx / num_filters;
+            int dst = idx / num_filters;
             int d = idx % num_filters;
 
-            int start_edge = src_node_ptr[src];
-            int end_edge = src_node_ptr[src + 1];
-
-            float sum = 0.0f;
+            int start_edge = dst_node_ptr[dst];
+            int end_edge = dst_node_ptr[dst + 1];
+            
             for (int e = start_edge; e < end_edge; e++) {
-                int dst = dst_list[e];
-                sum += grad_agg[dst * num_filters + d] * W[e * num_filters + d];
+                int src = src_list[e];
+                float grad_val = grad_agg[dst * num_filters + d] * W[e * num_filters + d];
+
+                atomicAdd(&grad_V[src * num_filters + d], grad_val);
             }
-            grad_V[idx] = sum;
         }
     }
 
     __global__ void agg_messages_backward_W_kernel(
         const float* __restrict__ grad_agg,
         const float* __restrict__ V,
-        const int32_t* __restrict__ src_list,
-        const int32_t* __restrict__ dst_list,
-        float* __restrict__ grad_W,
-        int num_edges,
+        const int32_t* __restrict__ dst_node_ptr, 
+        const int32_t* __restrict__ src_list, 
+        float* __restrict__ grad_W, 
+        int num_edges, 
         int num_filters
     ) {
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
         int total_elements = num_edges * num_filters;
         if (idx < total_elements) {
-            int e = idx / num_filters;
+            int dst = idx / num_filters;
             int d = idx % num_filters;
-
-            int src = src_list[e];
-            int dst = dst_list[e];
-
-            grad_W[idx] = grad_agg[dst * num_filters + d] * V[src * num_filters + d];
+            int start_edge = dst_node_ptr[dst];
+            int end_edge = dst_node_ptr[dst + 1];
+            for (int e = start_edge; e < end_edge; e++) {
+                int src = src_list[e];
+                grad_W[e * num_filters + d] = grad_agg[dst * num_filters + d] * V[src * num_filters + d];
+            }
         }
     }
 }
@@ -85,13 +86,11 @@ torch::Tensor AggMessagesFunction::forward(
     torch::autograd::AutogradContext *ctx,
     const torch::Tensor& W,
     const torch::Tensor& V,
-    const torch::Tensor& dst_node_ptr,
-    const torch::Tensor& src_list,
-    const torch::Tensor& src_node_ptr,
-    const torch::Tensor& dst_list,
+    const torch::Tensor& dst_node_ptr, 
+    const torch::Tensor& src_list, 
     int num_nodes
 ) {
-    ctx->save_for_backward({W, V, dst_node_ptr, src_list, src_node_ptr, dst_list});
+    ctx->save_for_backward({W, V, dst_node_ptr, src_list});
     ctx->saved_data["num_nodes"] = num_nodes;
 
     int num_filters = W.size(1);
@@ -125,8 +124,6 @@ torch::autograd::tensor_list AggMessagesFunction::backward(
     auto V = saved[1];
     auto dst_node_ptr = saved[2];
     auto src_list = saved[3];
-    auto src_node_ptr = saved[4];
-    auto dst_list = saved[5];
     int num_nodes = ctx->saved_data["num_nodes"].toInt();
     
     int num_edges = W.size(0);
@@ -142,8 +139,8 @@ torch::autograd::tensor_list AggMessagesFunction::backward(
     agg_messages_backward_V_kernel<<<blocks_V, threads>>>(
         grad_agg.data_ptr<float>(),
         W.data_ptr<float>(),
-        src_node_ptr.data_ptr<int32_t>(),
-        dst_list.data_ptr<int32_t>(),
+        dst_node_ptr.data_ptr<int32_t>(),
+        src_list.data_ptr<int32_t>(),
         grad_V.data_ptr<float>(),
         num_nodes,
         num_filters
@@ -155,8 +152,8 @@ torch::autograd::tensor_list AggMessagesFunction::backward(
     agg_messages_backward_W_kernel<<<blocks_W, threads>>>(
         grad_agg.data_ptr<float>(),
         V.data_ptr<float>(),
+        dst_node_ptr.data_ptr<int32_t>(),
         src_list.data_ptr<int32_t>(),
-        dst_list.data_ptr<int32_t>(),
         grad_W.data_ptr<float>(),
         num_edges,
         num_filters
@@ -164,7 +161,6 @@ torch::autograd::tensor_list AggMessagesFunction::backward(
 
     return {
         grad_W, grad_V, 
-        torch::Tensor(), torch::Tensor(), torch::Tensor(), torch::Tensor(), 
-        torch::Tensor() // num_nodes分
+        torch::Tensor(), torch::Tensor(), torch::Tensor()
     };
 }
